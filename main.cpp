@@ -26,9 +26,23 @@ extern "C"
 
   Result *get(char *path)
   {
+    Result *res = new Result();
+    res->status = -1;
+    res->body = nullptr;
+
     httplib::Client cli("https://brawlmods.com");
+
     cli.set_follow_location(true);
     cli.enable_server_certificate_verification(false);
+
+    cli.set_connection_timeout(1, 0);
+    cli.set_read_timeout(1, 0);
+    cli.set_write_timeout(1, 0);
+
+    if (!cli.is_valid())
+    {
+      return res;
+    }
 
     g_progress.store(0);
 
@@ -38,8 +52,12 @@ extern "C"
 
     auto cppRes = cli.Get(
       path,
-      [&](const httplib::Response &res) {
-        total = res.body.size();
+      [&](const httplib::Response &r) {
+        auto it = r.headers.find("Content-Length");
+        if (it != r.headers.end())
+        {
+          total = std::stoull(it->second);
+        }
         return true;
       },
       [&](const char *data, size_t data_length) {
@@ -56,14 +74,8 @@ extern "C"
       }
     );
 
-    Result *res = new Result();
-
     if (!cppRes)
     {
-      httplib::Error err = cppRes.error();
-      __android_log_print(ANDROID_LOG_ERROR, "inet", "HTTP Error Code: %d", static_cast<int>(err));
-      res->status = -1;
-      res->body = nullptr;
       return res;
     }
 
