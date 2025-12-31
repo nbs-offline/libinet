@@ -2,49 +2,77 @@
 #include <cstring>
 #include <iostream>
 #include <android/log.h>
+#include <atomic>
 
 struct Result
 {
-    int status;
-    char *body;
+  int status;
+  char *body;
 };
+
+static std::atomic<int> g_progress{0};
 
 extern "C"
 {
-    Result *get(char *path)
-    {
-        httplib::Client cli("https://brawlmods.com");
-        cli.set_follow_location(true);
-        cli.enable_server_certificate_verification(false);
+  void set_download_progress(int percent)
+  {
+    g_progress.store(percent);
+  }
 
-        auto cppRes = cli.Get(path);
-        Result *res = new Result();
+  int get_download_progress()
+  {
+    return g_progress.load();
+  }
 
-        if (!cppRes)
+  Result *get(char *path)
+  {
+    httplib::Client cli("https://brawlmods.com");
+    cli.set_follow_location(true);
+    cli.enable_server_certificate_verification(false);
+
+    g_progress.store(0);
+
+    std::string response_body;
+    uint64_t received = 0;
+    uint64_t total = 0;
+
+    auto cppRes = cli.Get(
+      path,
+      [&](const httplib::Response &res) {
+        total = res.body.size();
+        return true;
+      },
+      [&](const char *data, size_t data_length) {
+        response_body.append(data, data_length);
+        received += data_length;
+
+        if (total > 0)
         {
-            httplib::Error err = cppRes.error();
-            __android_log_print(ANDROID_LOG_ERROR, "inet", "HTTP Error Code: %d", static_cast<int>(err));
-            res->status = -1;
-            res->body = nullptr;
-            return res;
+          int percent = static_cast<int>((received * 100) / total);
+          set_download_progress(percent);
         }
 
-        res->status = cppRes->status;
-        res->body = new char[cppRes->body.size() + 1];
-        memcpy(res->body, cppRes->body.data(), cppRes->body.size());
-        res->body[cppRes->body.size()] = '\0';
-        return res;
+        return true;
+      }
+    );
+
+    Result *res = new Result();
+
+    if (!cppRes)
+    {
+      httplib::Error err = cppRes.error();
+      __android_log_print(ANDROID_LOG_ERROR, "inet", "HTTP Error Code: %d", static_cast<int>(err));
+      res->status = -1;
+      res->body = nullptr;
+      return res;
     }
 
-    Result *getScript()
-    {
-        char path[] = "/shadowbrawl/script.js";
-        return get(path);
-    }
+    set_download_progress(100);
 
-    Result *getVersion()
-    {
-        char path[] = "/shadowbrawl/version.txt";
-        return get(path);
-    }
+    res->status = cppRes->status;
+    res->body = new char[response_body.size() + 1];
+    memcpy(res->body, response_body.data(), response_body.size());
+    res->body[response_body.size()] = '\0';
+    return res;
+  }
 }
